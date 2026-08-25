@@ -70,7 +70,7 @@
 
 ```powershell
 # 添加 rmx bucket
-scoop bucket add rmx https://github.com/zerx-lab/rmx
+scoop bucket add rmx https://github.com/Alex-302/rmx
 
 # 安装
 scoop install rmx
@@ -80,7 +80,7 @@ scoop install rmx
 
 ```bash
 # 从 GitHub 安装
-cargo install --git https://github.com/zerx-lab/rmx
+cargo install --git https://github.com/Alex-302/rmx
 
 # 或从本地源码安装
 cargo install --path .
@@ -88,7 +88,7 @@ cargo install --path .
 
 ### 手动下载
 
-从 [GitHub Releases](https://github.com/zerx-lab/rmx/releases) 下载最新版本。
+从 [GitHub Releases](https://github.com/Alex-302/rmx/releases) 下载最新版本。
 
 ## 🔄 更新
 
@@ -110,7 +110,7 @@ rmx upgrade --force
 scoop update rmx
 
 # Cargo
-cargo install --git https://github.com/zerx-lab/rmx --force
+cargo install --git https://github.com/Alex-302/rmx --force
 ```
 
 ## 📖 使用方法

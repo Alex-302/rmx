@@ -70,7 +70,7 @@ Benchmark: 476 MB / 51,705 files+directories (npm node_modules, 3-run average)
 
 ```powershell
 # Add the rmx bucket
-scoop bucket add rmx https://github.com/zerx-lab/rmx
+scoop bucket add rmx https://github.com/Alex-302/rmx
 
 # Install
 scoop install rmx
@@ -80,7 +80,7 @@ scoop install rmx
 
 ```bash
 # Install from GitHub
-cargo install --git https://github.com/zerx-lab/rmx
+cargo install --git https://github.com/Alex-302/rmx
 
 # Or install from local source
 cargo install --path .
@@ -88,7 +88,7 @@ cargo install --path .
 
 ### Manual Download
 
-Download the latest release from [GitHub Releases](https://github.com/zerx-lab/rmx/releases).
+Download the latest release from [GitHub Releases](https://github.com/Alex-302/rmx/releases).
 
 ## 🔄 Update
 
@@ -110,7 +110,7 @@ Or update via your package manager:
 scoop update rmx
 
 # Cargo
-cargo install --git https://github.com/zerx-lab/rmx --force
+cargo install --git https://github.com/Alex-302/rmx --force
 ```
 
 ## 📖 Usage

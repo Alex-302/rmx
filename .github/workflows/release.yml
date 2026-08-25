@@ -102,11 +102,11 @@ jobs:
           {
               "version": "$VERSION",
               "description": "Fast parallel directory deletion for Windows - blazingly fast removal of node_modules, target, and other large directories",
-              "homepage": "https://github.com/zerx-lab/rmx",
+              "homepage": "https://github.com/Alex-302/rmx",
               "license": "MIT|Apache-2.0",
               "architecture": {
                   "64bit": {
-                      "url": "https://github.com/zerx-lab/rmx/releases/download/v$VERSION/rmx-$VERSION-x86_64-pc-windows-msvc.zip",
+                      "url": "https://github.com/Alex-302/rmx/releases/download/v$VERSION/rmx-$VERSION-x86_64-pc-windows-msvc.zip",
                       "hash": "$HASH"
                   }
               },
@@ -115,7 +115,7 @@ jobs:
               "autoupdate": {
                   "architecture": {
                       "64bit": {
-                          "url": "https://github.com/zerx-lab/rmx/releases/download/v\$version/rmx-\$version-x86_64-pc-windows-msvc.zip"
+                          "url": "https://github.com/Alex-302/rmx/releases/download/v\$version/rmx-\$version-x86_64-pc-windows-msvc.zip"
                       }
                   }
               }

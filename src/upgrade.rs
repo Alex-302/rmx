@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
-const GITHUB_API_URL: &str = "https://api.github.com/repos/zerx-lab/rmx/releases/latest";
+const GITHUB_API_URL: &str = "https://api.github.com/repos/Alex-302/rmx/releases/latest";
 const ASSET_SUFFIX: &str = "x86_64-pc-windows-msvc.zip";
 
 // ── GitHub API types ─────────────────────────────────────────────────────
