@@ -95,7 +95,7 @@ impl IContextMenu_Impl for RmxContextMenu_Impl {
     ) -> windows::core::Result<()> {
         unsafe {
             // Create a popup submenu holding all rmx actions
-            let submenu = CreatePopupMenu();
+            let submenu = CreatePopupMenu()?;
             if submenu.is_invalid() {
                 return Err(E_FAIL.into());
             }

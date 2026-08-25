@@ -97,7 +97,7 @@ jobs:
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           HASH="${{ steps.hash.outputs.hash }}"
-          
+
           cat > bucket/rmx.json << EOF
           {
               "version": "$VERSION",
