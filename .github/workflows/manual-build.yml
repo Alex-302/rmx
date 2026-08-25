@@ -1,0 +1,58 @@
+name: Build rmx (manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version string for the artifact (default: dev-<sha>)'
+        required: false
+        default: ''
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build Release
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Get version
+        id: version
+        shell: pwsh
+        run: |
+          $inputVersion = "${{ github.event.inputs.version }}"
+          if ($inputVersion) {
+            echo "version=$inputVersion" >> $env:GITHUB_OUTPUT
+          } else {
+            $sha = $env:GITHUB_SHA.Substring(0, 8)
+            echo "version=dev-$sha" >> $env:GITHUB_OUTPUT
+          }
+
+      - name: Build Release
+        env:
+          CI_VERSION: ${{ steps.version.outputs.version }}
+        run: cargo build --release --target x86_64-pc-windows-msvc
+
+      - name: Create archive
+        shell: pwsh
+        run: |
+          $version = "${{ steps.version.outputs.version }}"
+          New-Item -ItemType Directory -Force -Path "release"
+          Copy-Item "target/x86_64-pc-windows-msvc/release/rmx.exe" -Destination "release/"
+          Copy-Item "rmx-shell/target/release/rmx_shell.dll" -Destination "release/" -ErrorAction SilentlyContinue
+          Copy-Item "README.md" -Destination "release/" -ErrorAction SilentlyContinue
+          Copy-Item "LICENSE*" -Destination "release/" -ErrorAction SilentlyContinue
+          Compress-Archive -Path "release/*" -DestinationPath "rmx-$version-x86_64-pc-windows-msvc.zip"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rmx-windows-${{ steps.version.outputs.version }}
+          path: rmx-*.zip

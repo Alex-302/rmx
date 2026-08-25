@@ -15,12 +15,16 @@ use windows::Win32::UI::Shell::Common::ITEMIDLIST;
 use windows::Win32::UI::Shell::*;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
-const MENU_DELETE_TEXT: PCWSTR = w!("Delete with rmx");
-const MENU_UNLOCK_TEXT: PCWSTR = w!("Unlock with rmx");
+const MENU_ROOT_TEXT: PCWSTR = w!("Delete with rmx");
+const MENU_DELETE_TEXT: PCWSTR = w!("Force delete (kill processes)");
+const MENU_DELETE_NO_KILL_TEXT: PCWSTR = w!("Delete (no process kill)");
+const MENU_UNLOCK_TEXT: PCWSTR = w!("Unlock");
 const VERB_DELETE: &str = "rmxdelete";
+const VERB_DELETE_NO_KILL: &str = "rmxdeletenokill";
 const VERB_UNLOCK: &str = "rmxunlock";
 const CMD_ID_DELETE: u32 = 0;
-const CMD_ID_UNLOCK: u32 = 1;
+const CMD_ID_DELETE_NO_KILL: u32 = 1;
+const CMD_ID_UNLOCK: u32 = 2;
 
 #[implement(IShellExtInit, IContextMenu)]
 pub struct RmxContextMenu {
@@ -90,24 +94,46 @@ impl IContextMenu_Impl for RmxContextMenu_Impl {
         _uflags: u32,
     ) -> windows::core::Result<()> {
         unsafe {
+            // Create a popup submenu holding all rmx actions
+            let submenu = CreatePopupMenu();
+            if submenu.is_invalid() {
+                return Err(E_FAIL.into());
+            }
+
             InsertMenuW(
-                hmenu,
-                indexmenu,
+                submenu,
+                0,
                 MF_STRING | MF_BYPOSITION,
                 (idcmdfirst + CMD_ID_DELETE) as usize,
                 MENU_DELETE_TEXT,
             )?;
             InsertMenuW(
-                hmenu,
-                indexmenu + 1,
+                submenu,
+                1,
+                MF_STRING | MF_BYPOSITION,
+                (idcmdfirst + CMD_ID_DELETE_NO_KILL) as usize,
+                MENU_DELETE_NO_KILL_TEXT,
+            )?;
+            InsertMenuW(
+                submenu,
+                2,
                 MF_STRING | MF_BYPOSITION,
                 (idcmdfirst + CMD_ID_UNLOCK) as usize,
                 MENU_UNLOCK_TEXT,
             )?;
+
+            // Insert the submenu as a single top-level item
+            InsertMenuW(
+                hmenu,
+                indexmenu,
+                MF_POPUP | MF_BYPOSITION,
+                submenu.0 as usize,
+                MENU_ROOT_TEXT,
+            )?;
         }
 
-        // Return item count = 2 (two menu items added)
-        Err(Error::from(HRESULT(2)))
+        // Return item count = 1 (one popup item added)
+        Err(Error::from(HRESULT(1)))
     }
 
     fn InvokeCommand(&self, pici: *const CMINVOKECOMMANDINFO) -> windows::core::Result<()> {
@@ -124,12 +150,14 @@ impl IContextMenu_Impl for RmxContextMenu_Impl {
             };
             match verb {
                 v if v == VERB_DELETE => MenuAction::Delete,
+                v if v == VERB_DELETE_NO_KILL => MenuAction::DeleteNoKill,
                 v if v == VERB_UNLOCK => MenuAction::Unlock,
                 _ => return Err(E_INVALIDARG.into()),
             }
         } else {
             match cmd_id as u32 {
                 CMD_ID_DELETE => MenuAction::Delete,
+                CMD_ID_DELETE_NO_KILL => MenuAction::DeleteNoKill,
                 CMD_ID_UNLOCK => MenuAction::Unlock,
                 _ => return Err(E_INVALIDARG.into()),
             }
@@ -163,6 +191,7 @@ impl IContextMenu_Impl for RmxContextMenu_Impl {
 
         let verb = match idcmd as u32 {
             CMD_ID_DELETE => VERB_DELETE,
+            CMD_ID_DELETE_NO_KILL => VERB_DELETE_NO_KILL,
             CMD_ID_UNLOCK => VERB_UNLOCK,
             _ => return Err(E_INVALIDARG.into()),
         };
@@ -199,15 +228,18 @@ impl IContextMenu_Impl for RmxContextMenu_Impl {
 }
 
 enum MenuAction {
+    /// Force delete: also kills locking processes and force-closes their handles
     Delete,
+    /// Plain delete: locked files stay locked, no processes/handles are touched
+    DeleteNoKill,
     Unlock,
 }
 
 fn build_command_line(exe_path: &str, path: &PathBuf, action: &MenuAction) -> String {
     let path_str = path.to_string_lossy();
+    let flag = if path.is_dir() { "-r" } else { "" };
     match action {
         MenuAction::Delete => {
-            let flag = if path.is_dir() { "-r" } else { "" };
             if flag.is_empty() {
                 format!("\"{}\" --gui --kill-processes \"{}\"", exe_path, path_str)
             } else {
@@ -215,6 +247,13 @@ fn build_command_line(exe_path: &str, path: &PathBuf, action: &MenuAction) -> St
                     "\"{}\" {} --gui --kill-processes \"{}\"",
                     exe_path, flag, path_str
                 )
+            }
+        }
+        MenuAction::DeleteNoKill => {
+            if flag.is_empty() {
+                format!("\"{}\" --gui \"{}\"", exe_path, path_str)
+            } else {
+                format!("\"{}\" {} --gui \"{}\"", exe_path, flag, path_str)
             }
         }
         MenuAction::Unlock => {
