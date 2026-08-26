@@ -132,8 +132,12 @@ impl IContextMenu_Impl for RmxContextMenu_Impl {
             )?;
         }
 
-        // Return item count = 1 (one popup item added)
-        Err(Error::from(HRESULT(1)))
+        // Return item count covering ALL command IDs used by submenu items
+        // (offsets 0..2). Explorer routes clicks by ID range; items outside
+        // the reported range fall through to Explorer's own commands
+        // (e.g. "Open") and would open the "How do you want to open this file?"
+        // dialog for unassociated files.
+        Err(Error::from(HRESULT(3)))
     }
 
     fn InvokeCommand(&self, pici: *const CMINVOKECOMMANDINFO) -> windows::core::Result<()> {
