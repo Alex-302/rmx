@@ -116,7 +116,9 @@ impl DeleteProgressWindow {
     fn format_path_display(&self) -> String {
         let path_str = self.path.display().to_string();
         if path_str.len() > 45 {
-            format!("...{}", &path_str[path_str.len() - 42..])
+            // Byte slicing can panic on multi-byte UTF-8 (Cyrillic etc.); snap to a char boundary
+            let start = path_str.floor_char_boundary(path_str.len() - 42);
+            format!("...{}", &path_str[start..])
         } else {
             path_str
         }
@@ -153,7 +155,8 @@ impl Render for DeleteProgressWindow {
         }
 
         let current_display = if current_item.len() > 50 {
-            format!("...{}", &current_item[current_item.len() - 47..])
+            let start = current_item.floor_char_boundary(current_item.len() - 47);
+            format!("...{}", &current_item[start..])
         } else {
             current_item
         };
@@ -292,7 +295,8 @@ impl Render for DeleteProgressWindow {
         if is_complete && has_errors {
             if let Some(error_msg) = self.progress.get_first_error() {
                 let display_error = if error_msg.len() > 70 {
-                    format!("{}...", &error_msg[..67])
+                    let end = error_msg.floor_char_boundary(67);
+                    format!("{}...", &error_msg[..end])
                 } else {
                     error_msg
                 };
@@ -426,7 +430,9 @@ impl ConfirmDeleteWindow {
     fn format_path_display(&self) -> String {
         let path_str = self.path.display().to_string();
         if path_str.len() > 45 {
-            format!("...{}", &path_str[path_str.len() - 42..])
+            // Byte slicing can panic on multi-byte UTF-8 (Cyrillic etc.); snap to a char boundary
+            let start = path_str.floor_char_boundary(path_str.len() - 42);
+            format!("...{}", &path_str[start..])
         } else {
             path_str
         }
@@ -763,7 +769,9 @@ impl UnlockProgressWindow {
 
     fn truncate_path(path: &str, max_len: usize) -> String {
         if path.len() > max_len {
-            format!("...{}", &path[path.len() - (max_len - 3)..])
+            // Byte slicing can panic on multi-byte UTF-8 (Cyrillic etc.); snap to a char boundary
+            let start = path.floor_char_boundary(path.len() - (max_len - 3));
+            format!("...{}", &path[start..])
         } else {
             path.to_string()
         }
