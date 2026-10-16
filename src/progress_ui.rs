@@ -16,6 +16,39 @@ use gpui_component_assets::Assets;
 const MIN_DISPLAY_DURATION: Duration = Duration::from_millis(800);
 const FAST_DELETE_THRESHOLD: usize = 50;
 
+/// Maximum byte length of a path shown in the UI ("..." + tail).
+const PATH_DISPLAY_MAX: usize = 75;
+/// Maximum byte length of an error line shown in the UI (head + "..." + tail).
+const ERROR_DISPLAY_MAX: usize = 90;
+/// Maximum byte length of a locking process path shown in the Unlock window.
+const PROCESS_PATH_MAX: usize = 70;
+
+/// Shortens `text` to `max_len` bytes at most, keeping the tail.
+///
+/// The cut snaps to a UTF-8 char boundary, so multi-byte text (Cyrillic
+/// and other non-ASCII paths) cannot panic.
+fn truncate_tail(text: &str, max_len: usize) -> String {
+    if text.len() <= max_len {
+        return text.to_string();
+    }
+    let start = text.floor_char_boundary(text.len() - (max_len - 3));
+    format!("...{}", &text[start..])
+}
+
+/// Shortens `text` to `max_len` bytes at most, keeping the head and the tail.
+///
+/// The middle is replaced with "...". This keeps both the start of a path
+/// and the file name or error reason at its end readable.
+fn truncate_middle(text: &str, max_len: usize) -> String {
+    if text.len() <= max_len {
+        return text.to_string();
+    }
+    let side = (max_len - 3) / 2;
+    let head_end = text.floor_char_boundary(side);
+    let tail_start = text.ceil_char_boundary(text.len() - side);
+    format!("{}...{}", &text[..head_end], &text[tail_start..])
+}
+
 pub struct DeleteProgress {
     pub total_files: usize,
     pub total_dirs: usize,
@@ -114,14 +147,7 @@ impl DeleteProgressWindow {
     }
 
     fn format_path_display(&self) -> String {
-        let path_str = self.path.display().to_string();
-        if path_str.len() > 45 {
-            // Byte slicing can panic on multi-byte UTF-8 (Cyrillic etc.); snap to a char boundary
-            let start = path_str.floor_char_boundary(path_str.len() - 42);
-            format!("...{}", &path_str[start..])
-        } else {
-            path_str
-        }
+        truncate_tail(&self.path.display().to_string(), PATH_DISPLAY_MAX)
     }
 
     fn should_auto_close(&self) -> bool {
@@ -142,7 +168,7 @@ impl Render for DeleteProgressWindow {
 
         if is_complete && has_errors && !self.resized_for_errors {
             self.resized_for_errors = true;
-            window.resize(size(px(420.0), px(270.0)));
+            window.resize(size(px(560.0), px(270.0)));
         }
 
         if self.should_auto_close() && !has_errors {
@@ -154,12 +180,7 @@ impl Render for DeleteProgressWindow {
             .detach();
         }
 
-        let current_display = if current_item.len() > 50 {
-            let start = current_item.floor_char_boundary(current_item.len() - 47);
-            format!("...{}", &current_item[start..])
-        } else {
-            current_item
-        };
+        let current_display = truncate_tail(&current_item, PATH_DISPLAY_MAX);
 
         let theme = cx.theme();
         let bg = theme.background;
@@ -294,12 +315,7 @@ impl Render for DeleteProgressWindow {
 
         if is_complete && has_errors {
             if let Some(error_msg) = self.progress.get_first_error() {
-                let display_error = if error_msg.len() > 70 {
-                    let end = error_msg.floor_char_boundary(67);
-                    format!("{}...", &error_msg[..end])
-                } else {
-                    error_msg
-                };
+                let display_error = truncate_middle(&error_msg, ERROR_DISPLAY_MAX);
                 content = content.child(
                     div()
                         .mx_4()
@@ -428,14 +444,7 @@ impl ConfirmDeleteWindow {
     }
 
     fn format_path_display(&self) -> String {
-        let path_str = self.path.display().to_string();
-        if path_str.len() > 45 {
-            // Byte slicing can panic on multi-byte UTF-8 (Cyrillic etc.); snap to a char boundary
-            let start = path_str.floor_char_boundary(path_str.len() - 42);
-            format!("...{}", &path_str[start..])
-        } else {
-            path_str
-        }
+        truncate_tail(&self.path.display().to_string(), PATH_DISPLAY_MAX)
     }
 
     fn format_item_summary(&self) -> String {
@@ -626,7 +635,7 @@ pub fn run_confirmation_dialog(
 
         let state_inner = state_clone.clone();
         let path_clone = path.clone();
-        let window_bounds = Bounds::centered(None, size(px(420.0), px(210.0)), cx);
+        let window_bounds = Bounds::centered(None, size(px(560.0), px(210.0)), cx);
 
         cx.spawn(async move |cx| {
             let window_options = WindowOptions {
@@ -635,7 +644,7 @@ pub fn run_confirmation_dialog(
                     ..Default::default()
                 }),
                 window_bounds: Some(WindowBounds::Windowed(window_bounds)),
-                window_min_size: Some(size(px(320.0), px(180.0))),
+                window_min_size: Some(size(px(420.0), px(180.0))),
                 kind: WindowKind::PopUp,
                 is_movable: true,
                 ..Default::default()
@@ -667,7 +676,7 @@ pub fn run_progress_window(progress: Arc<DeleteProgress>, path: PathBuf) -> anyh
 
         let progress_clone = progress.clone();
         let path_clone = path.clone();
-        let window_bounds = Bounds::centered(None, size(px(420.0), px(200.0)), cx);
+        let window_bounds = Bounds::centered(None, size(px(560.0), px(200.0)), cx);
 
         cx.spawn(async move |cx| {
             let window_options = WindowOptions {
@@ -676,7 +685,7 @@ pub fn run_progress_window(progress: Arc<DeleteProgress>, path: PathBuf) -> anyh
                     ..Default::default()
                 }),
                 window_bounds: Some(WindowBounds::Windowed(window_bounds)),
-                window_min_size: Some(size(px(320.0), px(180.0))),
+                window_min_size: Some(size(px(420.0), px(180.0))),
                 kind: WindowKind::PopUp,
                 is_movable: true,
                 ..Default::default()
@@ -767,16 +776,6 @@ impl UnlockProgressWindow {
         }
     }
 
-    fn truncate_path(path: &str, max_len: usize) -> String {
-        if path.len() > max_len {
-            // Byte slicing can panic on multi-byte UTF-8 (Cyrillic etc.); snap to a char boundary
-            let start = path.floor_char_boundary(path.len() - (max_len - 3));
-            format!("...{}", &path[start..])
-        } else {
-            path.to_string()
-        }
-    }
-
     fn render_process_table(
         &self,
         processes: &[crate::winapi::LockingProcess],
@@ -811,7 +810,7 @@ impl UnlockProgressWindow {
                         .text_xs()
                         .font_weight(FontWeight::MEDIUM)
                         .text_color(muted_fg)
-                        .child("名称"),
+                        .child("Name"),
                 )
                 .child(
                     div()
@@ -819,7 +818,7 @@ impl UnlockProgressWindow {
                         .text_xs()
                         .font_weight(FontWeight::MEDIUM)
                         .text_color(muted_fg)
-                        .child("路径"),
+                        .child("Path"),
                 ),
         );
 
@@ -827,7 +826,7 @@ impl UnlockProgressWindow {
             let exe_display = proc
                 .exe_path
                 .as_deref()
-                .map(|p| Self::truncate_path(p, 45))
+                .map(|p| truncate_tail(p, PROCESS_PATH_MAX))
                 .unwrap_or_else(|| format!("PID: {}", proc.pid));
 
             table = table.child(
@@ -1196,7 +1195,7 @@ impl Render for NoLockWindow {
                         div()
                             .text_sm()
                             .text_color(fg)
-                            .child("未检测到文件被占用，无需解锁"),
+                            .child("No locked files found, nothing to unlock."),
                     ),
             )
             .child(

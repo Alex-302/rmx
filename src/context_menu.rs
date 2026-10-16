@@ -186,7 +186,7 @@ fn locking_processes_hint(path: &Path) -> String {
                 .iter()
                 .map(|p| format!("{} (PID {})", p.name, p.pid))
                 .collect();
-            format!("\n占用进程: {}", list.join(", "))
+            format!("\nLocking processes: {}", list.join(", "))
         }
         _ => String::new(),
     }
@@ -230,7 +230,7 @@ where
 
     // Step 3: 仍然失败，杀 explorer 兜底
     eprintln!(
-        "DLL 被占用，正在重启 Explorer...{}",
+        "DLL is locked, restarting Explorer...{}",
         locking_processes_hint(dll_path)
     );
 
