@@ -1075,7 +1075,7 @@ fn unlock_directory_gui(path: &Path) -> Result<(), Error> {
             }
         }
 
-        all_locking_procs.sort_by(|a, b| a.pid.cmp(&b.pid));
+        all_locking_procs.sort_by_key(|a| a.pid);
         all_locking_procs.dedup_by(|a, b| a.pid == b.pid);
     }
 
