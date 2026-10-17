@@ -512,16 +512,16 @@ impl ConfirmState {
 }
 
 pub struct ConfirmDeleteWindow {
-    path: PathBuf,
+    paths: Vec<PathBuf>,
     total_files: usize,
     total_dirs: usize,
     state: Arc<ConfirmState>,
 }
 
 impl ConfirmDeleteWindow {
-    pub fn new(path: PathBuf, total_files: usize, total_dirs: usize, state: Arc<ConfirmState>) -> Self {
+    pub fn new(paths: Vec<PathBuf>, total_files: usize, total_dirs: usize, state: Arc<ConfirmState>) -> Self {
         Self {
-            path,
+            paths,
             total_files,
             total_dirs,
             state,
@@ -529,10 +529,18 @@ impl ConfirmDeleteWindow {
     }
 
     fn format_path_display(&self, measurements: &mut TextMeasurements) -> String {
-        fit_middle(&self.path.display().to_string(), px(DIALOG_PATH_WIDTH), measurements)
+        let first = self
+            .paths
+            .first()
+            .map(|path| path.display().to_string())
+            .unwrap_or_default();
+        fit_middle(&first, px(DIALOG_PATH_WIDTH), measurements)
     }
 
     fn format_item_summary(&self) -> String {
+        if self.paths.len() > 1 {
+            return format!("已选择 {} 项", self.paths.len());
+        }
         if self.total_dirs == 0 && self.total_files <= 1 {
             return "1 个文件".to_string();
         }
@@ -708,7 +716,7 @@ pub struct ConfirmResult {
 /// - `Ok(ConfirmResult)` with confirmation and skip_confirm state
 /// - `Err` if dialog failed to launch
 pub fn run_confirmation_dialog(
-    path: PathBuf,
+    paths: Vec<PathBuf>,
     total_files: usize,
     total_dirs: usize,
 ) -> anyhow::Result<ConfirmResult> {
@@ -721,7 +729,7 @@ pub fn run_confirmation_dialog(
         gpui_component::init(cx);
 
         let state_inner = state_clone.clone();
-        let path_clone = path.clone();
+        let paths_clone = paths.clone();
         let window_bounds = Bounds::centered(None, size(px(560.0), px(210.0)), cx);
 
         cx.spawn(async move |cx| {
@@ -739,7 +747,7 @@ pub fn run_confirmation_dialog(
 
             cx.open_window(window_options, |window, cx| {
                 let view = cx.new(|_| {
-                    ConfirmDeleteWindow::new(path_clone, total_files, total_dirs, state_inner)
+                    ConfirmDeleteWindow::new(paths_clone, total_files, total_dirs, state_inner)
                 });
                 cx.new(|cx| Root::new(view, window, cx))
             })?;
