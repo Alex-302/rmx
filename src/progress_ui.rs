@@ -19,9 +19,11 @@ const FAST_DELETE_THRESHOLD: usize = 50;
 /// Maximum number of characters shown for a path in the UI ("..." + tail).
 /// Tuned so a Cyrillic path fills the text area of a 560 px window (about 476 px).
 const PATH_DISPLAY_MAX_CHARS: usize = 70;
-/// Maximum number of characters shown for an error line (head + "..." + tail).
-/// Tuned so a Cyrillic line fills the error box of a 560 px window (about 504 px).
-const ERROR_DISPLAY_MAX_CHARS: usize = 76;
+/// Maximum number of characters shown for an error line.
+///
+/// The line wraps, so this is only a safety cap for very long messages; the
+/// full text is always available through the Copy errors button.
+const ERROR_DISPLAY_MAX_CHARS: usize = 240;
 /// Maximum number of characters shown for a locking process path in the Unlock window.
 const PROCESS_PATH_MAX_CHARS: usize = 60;
 
@@ -172,7 +174,14 @@ impl Render for DeleteProgressWindow {
 
         if is_complete && has_errors && !self.resized_for_errors {
             self.resized_for_errors = true;
-            window.resize(size(px(560.0), px(270.0)));
+            // The error line wraps, so let the window grow with it.
+            let error_chars = self
+                .progress
+                .get_first_error()
+                .map(|error| error.chars().count())
+                .unwrap_or(0);
+            let extra_lines = (error_chars / 80).min(3) as f32;
+            window.resize(size(px(560.0), px(270.0 + extra_lines * 18.0)));
         }
 
         if self.should_auto_close() && !has_errors {
@@ -203,7 +212,11 @@ impl Render for DeleteProgressWindow {
         };
 
         let status_text = if is_complete && has_errors {
-            format!("Done, {} errors", error_count)
+            if error_count == 1 {
+                "Done, 1 error".to_string()
+            } else {
+                format!("Done, {} errors", error_count)
+            }
         } else if is_complete {
             "Completed".to_string()
         } else {
@@ -331,7 +344,6 @@ impl Render for DeleteProgressWindow {
                         .text_xs()
                         .text_color(danger_color)
                         .overflow_hidden()
-                        .whitespace_nowrap()
                         .child(display_error),
                 );
             }
@@ -742,6 +754,18 @@ pub fn run_progress_window(progress: Arc<DeleteProgress>, path: PathBuf) -> anyh
     });
 
     Ok(())
+}
+
+/// Shows the progress window in its error state.
+///
+/// Used when no progress window was displayed at all: a single file or a
+/// directory with few items deletes silently, so a failure would otherwise be
+/// invisible (the process is started detached and has no console).
+pub fn show_error_window(path: PathBuf, message: String) -> anyhow::Result<()> {
+    let progress = Arc::new(DeleteProgress::new(1, 0));
+    progress.set_errors(vec![message]);
+    progress.mark_complete();
+    run_progress_window(progress, path)
 }
 
 // ── Unlock mode UI (仿火绒风格) ─────────────────────────────────────────
