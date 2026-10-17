@@ -118,8 +118,25 @@ fn is_directory_via_find_wide(wide_path: &[u16]) -> bool {
     }
 }
 
+/// Checks that `path` exists as a literal name.
+///
+/// Unlike [`path_exists`], wildcards are never expanded: `FindFirstFile`
+/// matches `*.zip` against a real file, which must not count as
+/// "the literal path exists". Used to tell a real name such as
+/// `backup [1].zip` from a glob pattern.
+#[cfg(windows)]
+pub fn literal_path_exists(path: &Path) -> bool {
+    let wide_path = path_to_wide(path);
+    unsafe { GetFileAttributesW(PCWSTR(wide_path.as_ptr())) != INVALID_FILE_ATTRIBUTES }
+}
+
 #[cfg(not(windows))]
 pub fn path_exists(path: &Path) -> bool {
+    path.exists()
+}
+
+#[cfg(not(windows))]
+pub fn literal_path_exists(path: &Path) -> bool {
     path.exists()
 }
 
