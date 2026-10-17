@@ -26,10 +26,10 @@ use windows::Win32::Foundation::{ERROR_MORE_DATA, WIN32_ERROR};
 #[cfg(windows)]
 use windows::Win32::Storage::FileSystem::{
     CreateFileW, FileDispositionInfoEx, FindClose, FindFirstFileExW, FindNextFileW,
-    GetFileAttributesW, GetFinalPathNameByHandleW, SetFileInformationByHandle, DELETE,
+    GetFileAttributesW, GetFileType, GetFinalPathNameByHandleW, SetFileInformationByHandle, DELETE,
     FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT, FILE_FLAG_BACKUP_SEMANTICS,
     FILE_FLAG_OPEN_REPARSE_POINT, FILE_NAME_NORMALIZED, FILE_SHARE_DELETE, FILE_SHARE_READ,
-    FILE_SHARE_WRITE, FINDEX_INFO_LEVELS, FINDEX_SEARCH_OPS, FIND_FIRST_EX_FLAGS,
+    FILE_SHARE_WRITE, FILE_TYPE_DISK, FINDEX_INFO_LEVELS, FINDEX_SEARCH_OPS, FIND_FIRST_EX_FLAGS,
     INVALID_FILE_ATTRIBUTES, OPEN_EXISTING, WIN32_FIND_DATAW,
 };
 #[cfg(windows)]
@@ -522,92 +522,48 @@ fn get_process_exe_path(pid: u32) -> Option<String> {
 
 #[cfg(windows)]
 pub fn find_locking_processes(path: &Path) -> io::Result<Vec<LockingProcess>> {
-    let wide_path = path_to_wide(path);
-    let mut session_handle: u32 = 0;
-    let mut session_key = [0u16; CCH_RM_SESSION_KEY as usize + 1];
+    find_locking_processes_for(&[path.to_path_buf()])
+}
 
-    let result = unsafe { RmStartSession(&mut session_handle, 0, PWSTR(session_key.as_mut_ptr())) };
-
-    if result != WIN32_ERROR(0) {
-        unsafe {
-            let _ = RmEndSession(session_handle);
-        }
-        return Err(io::Error::from_raw_os_error(result.0 as i32));
+/// Locking processes for `paths`, asking the Restart Manager first.
+///
+/// The Restart Manager refuses names longer than `MAX_PATH` with
+/// `ERROR_WRITE_FAULT`, so those paths are resolved by walking the system
+/// handle table instead.
+#[cfg(windows)]
+fn find_locking_processes_for(paths: &[PathBuf]) -> io::Result<Vec<LockingProcess>> {
+    match find_locking_processes_rm(paths) {
+        Ok(processes) => Ok(processes),
+        Err(restart_manager_error) => locking_processes_from_handles(paths).map_err(|scan_error| {
+            io::Error::other(format!(
+                "Restart Manager: {restart_manager_error}; handle scan: {scan_error}"
+            ))
+        }),
     }
+}
 
-    let file_path_ptr = PCWSTR(wide_path.as_ptr());
-    let result = unsafe { RmRegisterResources(session_handle, Some(&[file_path_ptr]), None, None) };
+/// Processes holding a handle to one of `paths`, found by walking the system
+/// handle table.
+#[cfg(windows)]
+fn locking_processes_from_handles(paths: &[PathBuf]) -> io::Result<Vec<LockingProcess>> {
+    let (pids, _) = scan_handles_for_paths(paths, false, false)?;
 
-    if result != WIN32_ERROR(0) {
-        unsafe {
-            let _ = RmEndSession(session_handle);
-        }
-        return Err(io::Error::from_raw_os_error(result.0 as i32));
-    }
-
-    let mut proc_info_needed: u32 = 0;
-    let mut proc_info_count: u32 = 0;
-    let mut reboot_reasons: u32 = 0;
-
-    let result = unsafe {
-        RmGetList(
-            session_handle,
-            &mut proc_info_needed,
-            &mut proc_info_count,
-            None,
-            &mut reboot_reasons,
-        )
-    };
-
-    if result != WIN32_ERROR(0) && result != ERROR_MORE_DATA {
-        unsafe {
-            let _ = RmEndSession(session_handle);
-        }
-        return Err(io::Error::from_raw_os_error(result.0 as i32));
-    }
-
-    let mut processes = Vec::new();
-
-    if proc_info_needed > 0 {
-        let mut proc_info: Vec<RM_PROCESS_INFO> =
-            vec![unsafe { std::mem::zeroed() }; proc_info_needed as usize];
-        proc_info_count = proc_info_needed;
-
-        let result = unsafe {
-            RmGetList(
-                session_handle,
-                &mut proc_info_needed,
-                &mut proc_info_count,
-                Some(proc_info.as_mut_ptr()),
-                &mut reboot_reasons,
-            )
-        };
-
-        if result == WIN32_ERROR(0) {
-            for info in proc_info.iter().take(proc_info_count as usize) {
-                let pid = info.Process.dwProcessId;
-
-                let name_len = info
-                    .strAppName
-                    .iter()
-                    .position(|&c| c == 0)
-                    .unwrap_or(info.strAppName.len());
-                let name = String::from_utf16_lossy(&info.strAppName[..name_len]);
-
-                let exe_path = get_process_exe_path(pid);
-                processes.push(LockingProcess {
-                    pid,
-                    name,
-                    exe_path,
-                });
+    Ok(pids
+        .into_iter()
+        .map(|pid| {
+            let exe_path = get_process_exe_path(pid);
+            let name = exe_path
+                .as_deref()
+                .and_then(|exe| Path::new(exe).file_name())
+                .map(|name| name.to_string_lossy().to_string())
+                .unwrap_or_else(|| format!("PID {}", pid));
+            LockingProcess {
+                pid,
+                name,
+                exe_path,
             }
-        }
-    }
-
-    unsafe {
-        let _ = RmEndSession(session_handle);
-    }
-    Ok(processes)
+        })
+        .collect())
 }
 
 #[cfg(not(windows))]
@@ -621,6 +577,12 @@ pub fn find_locking_processes_batch(paths: &[PathBuf]) -> io::Result<Vec<Locking
         return Ok(Vec::new());
     }
 
+    find_locking_processes_for(paths)
+}
+
+/// Locking processes as the Restart Manager sees them.
+#[cfg(windows)]
+fn find_locking_processes_rm(paths: &[PathBuf]) -> io::Result<Vec<LockingProcess>> {
     let wide_paths: Vec<Vec<u16>> = paths.iter().map(|p| path_to_wide(p)).collect();
     let mut session_handle: u32 = 0;
     let mut session_key = [0u16; CCH_RM_SESSION_KEY as usize + 1];
@@ -902,11 +864,26 @@ struct SystemHandleTableEntryInfo {
 /// Only call when user explicitly opted in (--kill-processes).
 #[cfg(windows)]
 pub fn force_close_file_handles(paths: &[PathBuf], verbose: bool) -> io::Result<usize> {
-    if paths.is_empty() {
-        return Ok(0);
+    let (_, handles_closed) = scan_handles_for_paths(paths, true, verbose)?;
+
+    if verbose && handles_closed > 0 {
+        eprintln!("Force-closed {} handle(s)", handles_closed);
     }
 
-    let normalized_targets: Vec<String> = paths
+    Ok(handles_closed)
+}
+
+/// Walks the system handle table for handles that point to one of `paths`.
+///
+/// Returns the PIDs of the owning processes, and closes the matching handles in
+/// those processes when `close_handles` is set.
+#[cfg(windows)]
+fn scan_handles_for_paths(
+    paths: &[PathBuf],
+    close_handles: bool,
+    verbose: bool,
+) -> io::Result<(Vec<u32>, usize)> {
+    let normalized_targets: std::collections::HashSet<String> = paths
         .iter()
         .filter_map(|p| {
             let abs = std::fs::canonicalize(p).ok()?;
@@ -915,7 +892,7 @@ pub fn force_close_file_handles(paths: &[PathBuf], verbose: bool) -> io::Result<
         .collect();
 
     if normalized_targets.is_empty() {
-        return Ok(0);
+        return Ok((Vec::new(), 0));
     }
 
     let file_type_index = detect_file_object_type_index();
@@ -934,10 +911,15 @@ pub fn force_close_file_handles(paths: &[PathBuf], verbose: bool) -> io::Result<
     let entries = unsafe { std::slice::from_raw_parts((*info).handles.as_ptr(), num_handles) };
 
     let current_pid = std::process::id() as u16;
+    let mut pids: Vec<u32> = Vec::new();
     let mut handles_closed = 0usize;
+    let mut resolved = 0usize;
+    let mut unresolved = 0usize;
     let mut proc_cache: std::collections::HashMap<u16, Option<HANDLE>> =
         std::collections::HashMap::new();
     let current_process = unsafe { GetCurrentProcess() };
+
+    let mut candidates: Vec<CandidateHandle> = Vec::new();
 
     for entry in entries {
         let pid = entry.unique_process_id;
@@ -960,15 +942,13 @@ pub fn force_close_file_handles(paths: &[PathBuf], verbose: bool) -> io::Result<
             None => continue,
         };
 
-        let source_handle = HANDLE(entry.handle_value as *mut c_void);
-        let mut dup_handle = HANDLE::default();
-
+        let mut duplicate = HANDLE::default();
         if unsafe {
             DuplicateHandle(
                 proc_handle,
-                source_handle,
+                HANDLE(entry.handle_value as *mut c_void),
                 current_process,
-                &mut dup_handle,
+                &mut duplicate,
                 0,
                 false,
                 DUPLICATE_SAME_ACCESS,
@@ -979,34 +959,75 @@ pub fn force_close_file_handles(paths: &[PathBuf], verbose: bool) -> io::Result<
             continue;
         }
 
-        let is_match = resolve_handle_path_with_timeout(dup_handle)
-            .map(|p| normalized_targets.contains(&p.to_lowercase()))
-            .unwrap_or(false);
+        // Pipes and other character devices cannot be the file we look for, and
+        // reading their path costs a round trip to whoever owns them.
+        if unsafe { GetFileType(duplicate) } != FILE_TYPE_DISK {
+            unsafe { CloseHandle(duplicate).ok() };
+            continue;
+        }
 
-        unsafe { CloseHandle(dup_handle).ok() };
+        candidates.push(CandidateHandle {
+            pid,
+            handle_value: entry.handle_value,
+            duplicate,
+        });
+    }
 
-        if is_match {
-            let ok = unsafe {
-                DuplicateHandle(
-                    proc_handle,
-                    source_handle,
-                    HANDLE::default(),
-                    std::ptr::null_mut(),
-                    0,
-                    false,
-                    DUPLICATE_CLOSE_SOURCE,
-                )
+    let duplicates: Vec<HANDLE> = candidates.iter().map(|c| c.duplicate).collect();
+    let (paths, paths_read) = resolve_handle_paths(&duplicates);
+
+    for (candidate, path) in candidates.iter().zip(paths) {
+        unsafe { CloseHandle(candidate.duplicate).ok() };
+
+        let is_match = match path {
+            Some(path) => {
+                resolved += 1;
+                normalized_targets.contains(&path.to_lowercase())
             }
-            .is_ok();
+            None => {
+                unresolved += 1;
+                false
+            }
+        };
 
-            if ok {
-                handles_closed += 1;
-                if verbose {
-                    eprintln!(
-                        "  Closed handle 0x{:04X} in PID {}",
-                        entry.handle_value, pid
-                    );
-                }
+        if !is_match {
+            continue;
+        }
+
+        let pid = candidate.pid;
+        if !pids.contains(&(pid as u32)) {
+            pids.push(pid as u32);
+        }
+
+        if !close_handles {
+            continue;
+        }
+
+        let proc_handle = match proc_cache.get(&pid).copied().flatten() {
+            Some(handle) => handle,
+            None => continue,
+        };
+
+        let ok = unsafe {
+            DuplicateHandle(
+                proc_handle,
+                HANDLE(candidate.handle_value as *mut c_void),
+                HANDLE::default(),
+                std::ptr::null_mut(),
+                0,
+                false,
+                DUPLICATE_CLOSE_SOURCE,
+            )
+        }
+        .is_ok();
+
+        if ok {
+            handles_closed += 1;
+            if verbose {
+                eprintln!(
+                    "  Closed handle 0x{:04X} in PID {}",
+                    candidate.handle_value, pid
+                );
             }
         }
     }
@@ -1017,32 +1038,160 @@ pub fn force_close_file_handles(paths: &[PathBuf], verbose: bool) -> io::Result<
         }
     }
 
-    if verbose && handles_closed > 0 {
-        eprintln!("Force-closed {} handle(s)", handles_closed);
+    if verbose {
+        eprintln!(
+            "  read {} of {} handle path(s), {} resolved, {} unreadable",
+            paths_read,
+            candidates.len(),
+            resolved,
+            unresolved
+        );
     }
 
-    Ok(handles_closed)
+    Ok((pids, handles_closed))
 }
 
-const RESOLVE_TIMEOUT: Duration = Duration::from_millis(200);
-
+/// A handle duplicated out of another process, kept until its path is read.
 #[cfg(windows)]
-fn resolve_handle_path_with_timeout(handle: HANDLE) -> Option<String> {
-    let handle_val = handle.0 as usize;
-    let (tx, rx) = std::sync::mpsc::channel();
+struct CandidateHandle {
+    pid: u16,
+    handle_value: u16,
+    duplicate: HANDLE,
+}
 
-    thread::spawn(move || {
-        let h = HANDLE(handle_val as *mut c_void);
-        let mut buf = [0u16; 1024];
-        let len = unsafe { GetFinalPathNameByHandleW(h, &mut buf, FILE_NAME_NORMALIZED) };
-        if len > 0 && (len as usize) < buf.len() {
-            let _ = tx.send(Some(String::from_utf16_lossy(&buf[..len as usize])));
-        } else {
-            let _ = tx.send(None);
+/// How long the scan waits for the next handle path before it treats every
+/// worker as blocked on a handle (a pipe, a volume, a share that went away).
+/// Short is fine: a worker reads paths in tens of microseconds, and a false
+/// alarm only adds one more worker.
+#[cfg(windows)]
+const RESOLVE_STALL_TIMEOUT: Duration = Duration::from_millis(50);
+
+/// Threads that read handle paths at once.
+#[cfg(windows)]
+const RESOLVE_WORKERS: usize = 8;
+
+/// Upper bound on those threads: every stall adds one more, and a machine full
+/// of blocking handles must not spawn threads without end.
+#[cfg(windows)]
+const RESOLVE_MAX_WORKERS: usize = 64;
+
+/// Reads the path behind every handle in `handles`, in the same order.
+///
+/// `None` marks a handle whose path could not be read. The paths are read on a
+/// small pool of threads: `GetFinalPathNameByHandleW` can block on some
+/// handles, and a thread per handle costs more than the whole scan.
+#[cfg(windows)]
+fn resolve_handle_paths(handles: &[HANDLE]) -> (Vec<Option<String>>, usize) {
+    let mut paths: Vec<Option<String>> = vec![None; handles.len()];
+    if handles.is_empty() {
+        return (paths, 0);
+    }
+
+    // Handle values, not handles: raw pointers are not Send.
+    let values: std::sync::Arc<Vec<usize>> =
+        std::sync::Arc::new(handles.iter().map(|handle| handle.0 as usize).collect());
+    let (job_sender, job_receiver) = std::sync::mpsc::channel::<usize>();
+    let (result_sender, result_receiver) = std::sync::mpsc::channel::<(usize, Option<String>)>();
+
+    // One queue for all workers: a worker blocked on a handle must not take the
+    // handles behind it with it.
+    let job_receiver = std::sync::Arc::new(std::sync::Mutex::new(job_receiver));
+    let active_workers = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let mut worker_count = RESOLVE_WORKERS.min(values.len());
+    for _ in 0..worker_count {
+        spawn_handle_worker(
+            values.clone(),
+            job_receiver.clone(),
+            result_sender.clone(),
+            active_workers.clone(),
+        );
+    }
+
+    for index in 0..values.len() {
+        if job_sender.send(index).is_err() {
+            break;
         }
-    });
+    }
+    drop(job_sender);
 
-    rx.recv_timeout(RESOLVE_TIMEOUT).ok().flatten()
+    let mut received = 0usize;
+    while received < values.len() {
+        match result_receiver.recv_timeout(RESOLVE_STALL_TIMEOUT) {
+            Ok((index, path)) => {
+                paths[index] = path;
+                received += 1;
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                // Nothing came back for a while, so every worker is blocked on
+                // a handle. Workers stop once the queue is empty, so with none
+                // left there is nothing more to read; otherwise add another
+                // worker to keep the rest of the queue moving.
+                if worker_count >= RESOLVE_MAX_WORKERS
+                    || active_workers.load(std::sync::atomic::Ordering::Acquire) == 0
+                {
+                    break;
+                }
+                worker_count += 1;
+                spawn_handle_worker(
+                    values.clone(),
+                    job_receiver.clone(),
+                    result_sender.clone(),
+                    active_workers.clone(),
+                );
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+    }
+
+    if received < values.len() {
+        eprintln!(
+            "  warning: {} of {} handle paths were not read (handles are blocking)",
+            values.len() - received,
+            values.len()
+        );
+    }
+
+    (paths, received)
+}
+
+/// Reads handle paths from the shared queue until the queue is empty.
+///
+/// `active_workers` tells the caller whether any worker can still take work: a
+/// blocked worker never comes back, so a scan that stalls with no active worker
+/// left has read everything it can.
+#[cfg(windows)]
+fn spawn_handle_worker(
+    values: std::sync::Arc<Vec<usize>>,
+    job_receiver: std::sync::Arc<std::sync::Mutex<std::sync::mpsc::Receiver<usize>>>,
+    result_sender: std::sync::mpsc::Sender<(usize, Option<String>)>,
+    active_workers: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+) {
+    thread::spawn(move || {
+        active_workers.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+        loop {
+            let index = match job_receiver.lock().map(|receiver| receiver.recv()) {
+                Ok(Ok(index)) => index,
+                _ => break,
+            };
+            let path = handle_path(HANDLE(values[index] as *mut c_void));
+            if result_sender.send((index, path)).is_err() {
+                break;
+            }
+        }
+        active_workers.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+    });
+}
+
+/// The path behind a duplicated handle, or `None` when Windows cannot tell it.
+#[cfg(windows)]
+fn handle_path(handle: HANDLE) -> Option<String> {
+    let mut buf = [0u16; 1024];
+    let len = unsafe { GetFinalPathNameByHandleW(handle, &mut buf, FILE_NAME_NORMALIZED) };
+    if len > 0 && (len as usize) < buf.len() {
+        Some(String::from_utf16_lossy(&buf[..len as usize]))
+    } else {
+        None
+    }
 }
 
 /// 运行时检测 File 对象的 object_type_index（不同 Windows 版本值不同）。
