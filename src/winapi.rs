@@ -829,29 +829,36 @@ pub fn is_not_found_error(error: &io::Error) -> bool {
 // 与火绒安全/Unlocker 相同的内核级句柄关闭机制。
 // ============================================================================
 
-/// Undocumented SystemHandleInformation class (0x10)
+/// Undocumented SystemExtendedHandleInformation class (0x40).
+///
+/// The older SystemHandleInformation (0x10) keeps the process id and the handle
+/// value in 16 bits, so on a machine that has been up for a while they are
+/// truncated: the scan then inspects the wrong handle or misses it entirely.
 #[cfg(windows)]
-const SYSTEM_HANDLE_INFORMATION_CLASS: SYSTEM_INFORMATION_CLASS = SYSTEM_INFORMATION_CLASS(0x10);
+const SYSTEM_EXTENDED_HANDLE_INFORMATION_CLASS: SYSTEM_INFORMATION_CLASS =
+    SYSTEM_INFORMATION_CLASS(0x40);
 
 #[cfg(windows)]
 #[repr(C)]
 #[derive(Copy, Clone)]
-struct SystemHandleInformation {
-    number_of_handles: u32,
-    handles: [SystemHandleTableEntryInfo; 1],
+struct SystemExtendedHandleInformation {
+    number_of_handles: usize,
+    _reserved: usize,
+    handles: [SystemHandleTableEntryInfoEx; 1],
 }
 
 #[cfg(windows)]
 #[repr(C)]
 #[derive(Copy, Clone)]
-struct SystemHandleTableEntryInfo {
-    unique_process_id: u16,
-    _creator_back_trace_index: u16,
-    object_type_index: u8,
-    _handle_attributes: u8,
-    handle_value: u16,
+struct SystemHandleTableEntryInfoEx {
     _object: usize,
+    unique_process_id: usize,
+    handle_value: usize,
     granted_access: u32,
+    _creator_back_trace_index: u16,
+    object_type_index: u16,
+    _handle_attributes: u32,
+    _reserved: u32,
 }
 
 /// Force-close all file handles pointing to the given paths.
@@ -898,8 +905,8 @@ fn scan_handles_for_paths(
     let file_type_index = detect_file_object_type_index();
 
     let buf = query_system_handles()?;
-    let info = buf.as_ptr() as *const SystemHandleInformation;
-    let num_handles = unsafe { (*info).number_of_handles as usize };
+    let info = buf.as_ptr() as *const SystemExtendedHandleInformation;
+    let num_handles = unsafe { (*info).number_of_handles };
 
     if verbose {
         eprintln!(
@@ -910,12 +917,12 @@ fn scan_handles_for_paths(
 
     let entries = unsafe { std::slice::from_raw_parts((*info).handles.as_ptr(), num_handles) };
 
-    let current_pid = std::process::id() as u16;
+    let current_pid = std::process::id() as usize;
     let mut pids: Vec<u32> = Vec::new();
     let mut handles_closed = 0usize;
     let mut resolved = 0usize;
     let mut unresolved = 0usize;
-    let mut proc_cache: std::collections::HashMap<u16, Option<HANDLE>> =
+    let mut proc_cache: std::collections::HashMap<usize, Option<HANDLE>> =
         std::collections::HashMap::new();
     let current_process = unsafe { GetCurrentProcess() };
 
@@ -1054,8 +1061,8 @@ fn scan_handles_for_paths(
 /// A handle duplicated out of another process, kept until its path is read.
 #[cfg(windows)]
 struct CandidateHandle {
-    pid: u16,
-    handle_value: u16,
+    pid: usize,
+    handle_value: usize,
     duplicate: HANDLE,
 }
 
@@ -1197,7 +1204,7 @@ fn handle_path(handle: HANDLE) -> Option<String> {
 /// 运行时检测 File 对象的 object_type_index（不同 Windows 版本值不同）。
 /// 通过打开 NUL 设备获取一个已知的 File 句柄，然后在系统句柄表中找到它的 type index。
 #[cfg(windows)]
-fn detect_file_object_type_index() -> Option<u8> {
+fn detect_file_object_type_index() -> Option<u16> {
     let nul_path = path_to_wide(Path::new("NUL"));
     let nul_handle = unsafe {
         CreateFileW(
@@ -1212,12 +1219,12 @@ fn detect_file_object_type_index() -> Option<u8> {
     }
     .ok()?;
 
-    let current_pid = std::process::id() as u16;
-    let nul_handle_value = nul_handle.0 as u16;
+    let current_pid = std::process::id() as usize;
+    let nul_handle_value = nul_handle.0 as usize;
 
     let buf = query_system_handles().ok()?;
-    let info = buf.as_ptr() as *const SystemHandleInformation;
-    let num_handles = unsafe { (*info).number_of_handles as usize };
+    let info = buf.as_ptr() as *const SystemExtendedHandleInformation;
+    let num_handles = unsafe { (*info).number_of_handles };
     let entries = unsafe { std::slice::from_raw_parts((*info).handles.as_ptr(), num_handles) };
 
     let mut result = None;
@@ -1241,7 +1248,7 @@ fn query_system_handles() -> io::Result<Vec<u8>> {
         let mut return_length: u32 = 0;
         let status: NTSTATUS = unsafe {
             NtQuerySystemInformation(
-                SYSTEM_HANDLE_INFORMATION_CLASS,
+                SYSTEM_EXTENDED_HANDLE_INFORMATION_CLASS,
                 buf.as_mut_ptr() as *mut c_void,
                 buf_size as u32,
                 &mut return_length,
