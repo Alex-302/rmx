@@ -204,8 +204,8 @@ After initialization, right-click any file or folder to see "Delete with rmx" op
 
 ### Interface Language
 
-The progress, confirmation, error and unlock windows follow the interface
-language:
+The progress, confirmation, error and unlock windows and the Explorer menu follow
+the interface language:
 
 ```bash
 # Use English
