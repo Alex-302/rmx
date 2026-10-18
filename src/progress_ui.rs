@@ -1,6 +1,7 @@
 #![allow(clippy::duplicated_attributes)]
 #![cfg(windows)]
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
@@ -10,33 +11,125 @@ use gpui::prelude::FluentBuilder;
 use gpui::*;
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::progress::Progress;
+use gpui_component::theme::Theme;
 use gpui_component::{ActiveTheme, IconName, Root, Sizable};
 use gpui_component_assets::Assets;
 
 const MIN_DISPLAY_DURATION: Duration = Duration::from_millis(800);
 const FAST_DELETE_THRESHOLD: usize = 50;
 
-/// Maximum number of characters shown for a path in the UI.
-const PATH_DISPLAY_MAX_CHARS: usize = 70;
-/// Maximum number of characters shown for the line with the current item.
-const CURRENT_ITEM_MAX_CHARS: usize = 70;
-/// Maximum number of characters shown for an error message.
-const ERROR_DISPLAY_MAX_CHARS: usize = 76;
+/// Widths of the fields that show paths, in logical pixels (the windows are
+/// 560 px wide). Used as a budget for the text that has to fit them.
+const PATH_LINE_WIDTH: f32 = 440.0; // progress window: path line under the title
+const DIALOG_PATH_WIDTH: f32 = 470.0; // confirm dialog: path box
+const CELL_WIDTH: f32 = 380.0; // unlock window: table cells
+/// Width of the error box in logical pixels, and how many lines the error text
+/// may occupy. Longer messages are cut in the middle, so the start of the path
+/// and the reason at its end stay visible; the full text is always available
+/// through the Copy errors button.
+const ERROR_LINE_WIDTH: f32 = 500.0;
 
-/// Shortens `text` to `max_chars` characters at most, keeping both ends.
+
+/// Measures text the way gpui paints it.
 ///
-/// The middle is replaced with "...". This keeps the start of a path and the
-/// file name at its end readable, instead of losing the file name.
-fn truncate_middle(text: &str, max_chars: usize) -> String {
-    let count = text.chars().count();
-    if count <= max_chars {
+/// The windows draw 12 px text (`text_xs` = 0.75 rem) and a width estimated per
+/// character from a constant is off by tens of percent: wrapped lines then end
+/// far from the right edge of their box. Every character is measured once with
+/// the text system and cached, so the layout matches the painted text.
+struct TextMeasurements {
+    text_system: Arc<WindowTextSystem>,
+    text_style: TextStyle,
+    font_size: Pixels,
+    char_widths: HashMap<char, Pixels>,
+}
+
+impl TextMeasurements {
+    fn new(text_system: Arc<WindowTextSystem>, theme: &Theme, rem_size: Pixels) -> Self {
+        let text_style = TextStyle {
+            font_family: theme.font_family.clone(),
+            font_size: rems(0.75).into(),
+            ..Default::default()
+        };
+        let font_size = text_style.font_size.to_pixels(rem_size);
+
+        Self {
+            text_system,
+            text_style,
+            font_size,
+            char_widths: HashMap::new(),
+        }
+    }
+
+    fn char_width(&mut self, character: char) -> Pixels {
+        if let Some(width) = self.char_widths.get(&character) {
+            return *width;
+        }
+
+        let mut buffer = [0; 4];
+        let text = character.encode_utf8(&mut buffer);
+        let run = self.text_style.to_run(text.len());
+        let width = self
+            .text_system
+            .layout_line(text, self.font_size, &[run], None)
+            .width;
+        self.char_widths.insert(character, width);
+        width
+    }
+
+    fn width(&mut self, text: &str) -> Pixels {
+        text.chars()
+            .map(|character| self.char_width(character))
+            .sum()
+    }
+}
+
+
+/// Shortens `text` so that it fits `max_width` pixels, cutting the middle out.
+///
+/// The middle is replaced with "...". This keeps both the start of a path and
+/// the file name or error reason at its end readable, and the line fills its
+/// field instead of stopping half way.
+fn fit_middle(text: &str, max_width: Pixels, measurements: &mut TextMeasurements) -> String {
+    if measurements.width(text) <= max_width {
         return text.to_string();
     }
-    let side = (max_chars - 3) / 2;
-    let head: String = text.chars().take(side).collect();
-    let tail: String = text.chars().skip(count - side).collect();
-    format!("{}...{}", head, tail)
+
+    let ellipsis = "...";
+    let budget = max_width - measurements.width(ellipsis);
+    if budget <= px(0.0) {
+        return ellipsis.to_string();
+    }
+    let side = budget * 0.5;
+
+    let mut head_end = 0;
+    let mut head_width = px(0.0);
+    for (index, character) in text.char_indices() {
+        let width = measurements.char_width(character);
+        if head_width + width > side {
+            break;
+        }
+        head_width += width;
+        head_end = index + character.len_utf8();
+    }
+
+    let mut tail_start = text.len();
+    let mut tail_width = px(0.0);
+    for (index, character) in text.char_indices().rev() {
+        if index < head_end {
+            break;
+        }
+        let width = measurements.char_width(character);
+        if tail_width + width > side {
+            break;
+        }
+        tail_width += width;
+        tail_start = index;
+    }
+
+    format!("{}{}{}", &text[..head_end], ellipsis, &text[tail_start..])
 }
+
+
 
 pub struct DeleteProgress {
     pub total_files: usize,
@@ -135,8 +228,8 @@ impl DeleteProgressWindow {
         }
     }
 
-    fn format_path_display(&self) -> String {
-        truncate_middle(&self.path.display().to_string(), PATH_DISPLAY_MAX_CHARS)
+    fn format_path_display(&self, measurements: &mut TextMeasurements) -> String {
+        fit_middle(&self.path.display().to_string(), px(PATH_LINE_WIDTH), measurements)
     }
 
     fn should_auto_close(&self) -> bool {
@@ -169,7 +262,10 @@ impl Render for DeleteProgressWindow {
             .detach();
         }
 
-        let current_display = truncate_middle(&current_item, CURRENT_ITEM_MAX_CHARS);
+        let mut measurements =
+            TextMeasurements::new(window.text_system().clone(), cx.theme(), window.rem_size());
+        let current_display = fit_middle(&current_item, px(PATH_LINE_WIDTH), &mut measurements);
+        let path_display = self.format_path_display(&mut measurements);
 
         let theme = cx.theme();
         let bg = theme.background;
@@ -268,7 +364,7 @@ impl Render for DeleteProgressWindow {
                                             .text_color(muted_fg)
                                             .whitespace_nowrap()
                                             .overflow_hidden()
-                                            .child(self.format_path_display()),
+                                            .child(path_display),
                                     ),
                             ),
                     )
@@ -304,7 +400,7 @@ impl Render for DeleteProgressWindow {
 
         if is_complete && has_errors {
             if let Some(error_msg) = self.progress.get_first_error() {
-                let display_error = truncate_middle(&error_msg, ERROR_DISPLAY_MAX_CHARS);
+                let display_error = fit_middle(&error_msg, px(ERROR_LINE_WIDTH), &mut measurements);
                 content = content.child(
                     div()
                         .mx_4()
@@ -432,8 +528,8 @@ impl ConfirmDeleteWindow {
         }
     }
 
-    fn format_path_display(&self) -> String {
-        truncate_middle(&self.path.display().to_string(), PATH_DISPLAY_MAX_CHARS)
+    fn format_path_display(&self, measurements: &mut TextMeasurements) -> String {
+        fit_middle(&self.path.display().to_string(), px(DIALOG_PATH_WIDTH), measurements)
     }
 
     fn format_item_summary(&self) -> String {
@@ -456,7 +552,9 @@ impl Render for ConfirmDeleteWindow {
         let state = self.state.clone();
         let state_cancel = self.state.clone();
         let state_checkbox = self.state.clone();
-        let path_display = self.format_path_display();
+        let mut measurements =
+            TextMeasurements::new(_window.text_system().clone(), cx.theme(), _window.rem_size());
+        let path_display = self.format_path_display(&mut measurements);
         let item_summary = self.format_item_summary();
         let skip_checked = self.state.should_skip_next_confirm();
 
@@ -765,14 +863,11 @@ impl UnlockProgressWindow {
         }
     }
 
-    fn truncate_path(path: &str, max_len: usize) -> String {
-        truncate_middle(path, max_len)
-    }
-
     fn render_process_table(
         &self,
         processes: &[crate::winapi::LockingProcess],
-        theme: &gpui_component::theme::Theme,
+        theme: &Theme,
+        measurements: &mut TextMeasurements,
     ) -> Div {
         let fg = theme.foreground;
         let muted_fg = theme.muted_foreground;
@@ -819,7 +914,7 @@ impl UnlockProgressWindow {
             let exe_display = proc
                 .exe_path
                 .as_deref()
-                .map(|p| Self::truncate_path(p, 45))
+                .map(|p| fit_middle(p, px(CELL_WIDTH), measurements))
                 .unwrap_or_else(|| format!("PID: {}", proc.pid));
 
             table = table.child(
@@ -907,6 +1002,8 @@ impl Render for UnlockProgressWindow {
         let files = &self.files;
 
         let theme = cx.theme();
+        let mut measurements =
+            TextMeasurements::new(window.text_system().clone(), theme, window.rem_size());
         let bg = theme.background;
         let fg = theme.foreground;
         let muted_fg = theme.muted_foreground;
@@ -1025,7 +1122,7 @@ impl Render for UnlockProgressWindow {
                 div().flex().flex_col().gap_1().px_4().pt_3()
                     .child(div().text_xs().font_weight(FontWeight::MEDIUM).text_color(fg)
                         .child(format!("{} 被以下程序锁定", first_file_name)))
-                    .child(self.render_process_table(&processes, theme)),
+                    .child(self.render_process_table(&processes, theme, &mut measurements)),
             );
         }
 
