@@ -16,6 +16,37 @@ use gpui_component_assets::Assets;
 const MIN_DISPLAY_DURATION: Duration = Duration::from_millis(800);
 const FAST_DELETE_THRESHOLD: usize = 50;
 
+/// Maximum number of characters shown for a path in the UI ("..." + tail).
+const PATH_DISPLAY_MAX_CHARS: usize = 45;
+/// Maximum number of characters shown for the line with the current item.
+const CURRENT_ITEM_MAX_CHARS: usize = 50;
+/// Maximum number of characters shown for an error message ("..." + head).
+const ERROR_DISPLAY_MAX_CHARS: usize = 70;
+
+/// Shortens `text` to `max_chars` characters at most, keeping the tail.
+///
+/// Counting characters instead of bytes keeps the visible length the same for
+/// Latin and multi-byte text: a Cyrillic path is no longer cut twice as early
+/// as a Latin one.
+fn truncate_tail(text: &str, max_chars: usize) -> String {
+    let count = text.chars().count();
+    if count <= max_chars {
+        return text.to_string();
+    }
+    let tail: String = text.chars().skip(count - (max_chars - 3)).collect();
+    format!("...{}", tail)
+}
+
+/// Shortens `text` to `max_chars` characters at most, keeping the head.
+fn truncate_head(text: &str, max_chars: usize) -> String {
+    let count = text.chars().count();
+    if count <= max_chars {
+        return text.to_string();
+    }
+    let head: String = text.chars().take(max_chars - 3).collect();
+    format!("{}...", head)
+}
+
 pub struct DeleteProgress {
     pub total_files: usize,
     pub total_dirs: usize,
@@ -114,14 +145,7 @@ impl DeleteProgressWindow {
     }
 
     fn format_path_display(&self) -> String {
-        let path_str = self.path.display().to_string();
-        if path_str.len() > 45 {
-            // Byte slicing can panic on multi-byte UTF-8 (Cyrillic etc.); snap to a char boundary
-            let start = path_str.floor_char_boundary(path_str.len() - 42);
-            format!("...{}", &path_str[start..])
-        } else {
-            path_str
-        }
+        truncate_tail(&self.path.display().to_string(), PATH_DISPLAY_MAX_CHARS)
     }
 
     fn should_auto_close(&self) -> bool {
@@ -154,12 +178,7 @@ impl Render for DeleteProgressWindow {
             .detach();
         }
 
-        let current_display = if current_item.len() > 50 {
-            let start = current_item.floor_char_boundary(current_item.len() - 47);
-            format!("...{}", &current_item[start..])
-        } else {
-            current_item
-        };
+        let current_display = truncate_tail(&current_item, CURRENT_ITEM_MAX_CHARS);
 
         let theme = cx.theme();
         let bg = theme.background;
@@ -294,12 +313,7 @@ impl Render for DeleteProgressWindow {
 
         if is_complete && has_errors {
             if let Some(error_msg) = self.progress.get_first_error() {
-                let display_error = if error_msg.len() > 70 {
-                    let end = error_msg.floor_char_boundary(67);
-                    format!("{}...", &error_msg[..end])
-                } else {
-                    error_msg
-                };
+                let display_error = truncate_head(&error_msg, ERROR_DISPLAY_MAX_CHARS);
                 content = content.child(
                     div()
                         .mx_4()
@@ -428,14 +442,7 @@ impl ConfirmDeleteWindow {
     }
 
     fn format_path_display(&self) -> String {
-        let path_str = self.path.display().to_string();
-        if path_str.len() > 45 {
-            // Byte slicing can panic on multi-byte UTF-8 (Cyrillic etc.); snap to a char boundary
-            let start = path_str.floor_char_boundary(path_str.len() - 42);
-            format!("...{}", &path_str[start..])
-        } else {
-            path_str
-        }
+        truncate_tail(&self.path.display().to_string(), PATH_DISPLAY_MAX_CHARS)
     }
 
     fn format_item_summary(&self) -> String {
@@ -768,13 +775,7 @@ impl UnlockProgressWindow {
     }
 
     fn truncate_path(path: &str, max_len: usize) -> String {
-        if path.len() > max_len {
-            // Byte slicing can panic on multi-byte UTF-8 (Cyrillic etc.); snap to a char boundary
-            let start = path.floor_char_boundary(path.len() - (max_len - 3));
-            format!("...{}", &path[start..])
-        } else {
-            path.to_string()
-        }
+        truncate_tail(path, max_len)
     }
 
     fn render_process_table(
