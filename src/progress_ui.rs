@@ -16,35 +16,26 @@ use gpui_component_assets::Assets;
 const MIN_DISPLAY_DURATION: Duration = Duration::from_millis(800);
 const FAST_DELETE_THRESHOLD: usize = 50;
 
-/// Maximum number of characters shown for a path in the UI ("..." + tail).
-const PATH_DISPLAY_MAX_CHARS: usize = 45;
+/// Maximum number of characters shown for a path in the UI.
+const PATH_DISPLAY_MAX_CHARS: usize = 70;
 /// Maximum number of characters shown for the line with the current item.
-const CURRENT_ITEM_MAX_CHARS: usize = 50;
-/// Maximum number of characters shown for an error message ("..." + head).
-const ERROR_DISPLAY_MAX_CHARS: usize = 70;
+const CURRENT_ITEM_MAX_CHARS: usize = 70;
+/// Maximum number of characters shown for an error message.
+const ERROR_DISPLAY_MAX_CHARS: usize = 76;
 
-/// Shortens `text` to `max_chars` characters at most, keeping the tail.
+/// Shortens `text` to `max_chars` characters at most, keeping both ends.
 ///
-/// Counting characters instead of bytes keeps the visible length the same for
-/// Latin and multi-byte text: a Cyrillic path is no longer cut twice as early
-/// as a Latin one.
-fn truncate_tail(text: &str, max_chars: usize) -> String {
+/// The middle is replaced with "...". This keeps the start of a path and the
+/// file name at its end readable, instead of losing the file name.
+fn truncate_middle(text: &str, max_chars: usize) -> String {
     let count = text.chars().count();
     if count <= max_chars {
         return text.to_string();
     }
-    let tail: String = text.chars().skip(count - (max_chars - 3)).collect();
-    format!("...{}", tail)
-}
-
-/// Shortens `text` to `max_chars` characters at most, keeping the head.
-fn truncate_head(text: &str, max_chars: usize) -> String {
-    let count = text.chars().count();
-    if count <= max_chars {
-        return text.to_string();
-    }
-    let head: String = text.chars().take(max_chars - 3).collect();
-    format!("{}...", head)
+    let side = (max_chars - 3) / 2;
+    let head: String = text.chars().take(side).collect();
+    let tail: String = text.chars().skip(count - side).collect();
+    format!("{}...{}", head, tail)
 }
 
 pub struct DeleteProgress {
@@ -145,7 +136,7 @@ impl DeleteProgressWindow {
     }
 
     fn format_path_display(&self) -> String {
-        truncate_tail(&self.path.display().to_string(), PATH_DISPLAY_MAX_CHARS)
+        truncate_middle(&self.path.display().to_string(), PATH_DISPLAY_MAX_CHARS)
     }
 
     fn should_auto_close(&self) -> bool {
@@ -178,7 +169,7 @@ impl Render for DeleteProgressWindow {
             .detach();
         }
 
-        let current_display = truncate_tail(&current_item, CURRENT_ITEM_MAX_CHARS);
+        let current_display = truncate_middle(&current_item, CURRENT_ITEM_MAX_CHARS);
 
         let theme = cx.theme();
         let bg = theme.background;
@@ -313,7 +304,7 @@ impl Render for DeleteProgressWindow {
 
         if is_complete && has_errors {
             if let Some(error_msg) = self.progress.get_first_error() {
-                let display_error = truncate_head(&error_msg, ERROR_DISPLAY_MAX_CHARS);
+                let display_error = truncate_middle(&error_msg, ERROR_DISPLAY_MAX_CHARS);
                 content = content.child(
                     div()
                         .mx_4()
@@ -442,7 +433,7 @@ impl ConfirmDeleteWindow {
     }
 
     fn format_path_display(&self) -> String {
-        truncate_tail(&self.path.display().to_string(), PATH_DISPLAY_MAX_CHARS)
+        truncate_middle(&self.path.display().to_string(), PATH_DISPLAY_MAX_CHARS)
     }
 
     fn format_item_summary(&self) -> String {
@@ -775,7 +766,7 @@ impl UnlockProgressWindow {
     }
 
     fn truncate_path(path: &str, max_len: usize) -> String {
-        truncate_tail(path, max_len)
+        truncate_middle(path, max_len)
     }
 
     fn render_process_table(
