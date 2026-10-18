@@ -21,6 +21,8 @@ const VERB_DELETE: &str = "rmxdelete";
 const VERB_UNLOCK: &str = "rmxunlock";
 const CMD_ID_DELETE: u32 = 0;
 const CMD_ID_UNLOCK: u32 = 1;
+/// The menu is built for the target of a shortcut, not for the shortcut itself.
+const CMF_VERBSONLY: u32 = 0x00000002;
 
 #[implement(IShellExtInit, IContextMenu)]
 pub struct RmxContextMenu {
@@ -87,8 +89,15 @@ impl IContextMenu_Impl for RmxContextMenu_Impl {
         indexmenu: u32,
         idcmdfirst: u32,
         _idcmdlast: u32,
-        _uflags: u32,
+        uflags: u32,
     ) -> windows::core::Result<()> {
+        // CMF_VERBSONLY means the shell resolved a shortcut and builds this menu
+        // for its target, so the data object holds the target, not the .lnk.
+        // Deleting it would remove the wrong file, so rmx offers nothing here.
+        if uflags & CMF_VERBSONLY != 0 {
+            return Ok(());
+        }
+
         unsafe {
             InsertMenuW(
                 hmenu,
