@@ -380,6 +380,18 @@ fn process_path(path: &Path, args: &Args) -> Result<DeletionStats, Error> {
     }
 }
 
+/// Formats a deletion error the way the progress window shows it.
+#[cfg(windows)]
+fn error_message(error: &Error) -> String {
+    match error {
+        Error::PartialFailure { errors, .. } => match errors.first() {
+            Some(first) => format!("{}: {}", first.path.display(), first.error),
+            None => error.to_string(),
+        },
+        other => other.to_string(),
+    }
+}
+
 fn process_file(path: &Path, args: &Args) -> Result<DeletionStats, Error> {
     if args.dry_run {
         if args.verbose {
@@ -435,7 +447,12 @@ fn process_file(path: &Path, args: &Args) -> Result<DeletionStats, Error> {
             }
         }
         Err(e) => {
-            return Err(Error::io_with_path(path.to_path_buf(), e));
+            let error = Error::io_with_path(path.to_path_buf(), e);
+            #[cfg(windows)]
+            if args.gui {
+                let _ = progress_ui::show_error_window(path.to_path_buf(), error_message(&error));
+            }
+            return Err(error);
         }
     }
 
@@ -635,7 +652,11 @@ fn delete_directory_with_gui(
     let total_items = tree.file_count + tree.dirs.len();
 
     if !progress_ui::should_show_progress_ui(total_items) {
-        return delete_directory_internal(path, args, None, Some(tree));
+        let result = delete_directory_internal(path, args, None, Some(tree));
+        if let Err(error) = &result {
+            let _ = progress_ui::show_error_window(path.to_path_buf(), error_message(error));
+        }
+        return result;
     }
 
     let progress = Arc::new(DeleteProgress::new(tree.file_count, tree.dirs.len()));

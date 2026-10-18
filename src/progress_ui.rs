@@ -28,6 +28,10 @@ const CELL_WIDTH: f32 = 380.0; // unlock window: table cells
 /// and the reason at its end stay visible; the full text is always available
 /// through the Copy errors button.
 const ERROR_LINE_WIDTH: f32 = 500.0;
+const ERROR_MAX_LINES: usize = 5;
+/// How often a message is cut shorter when it still wraps into too many lines
+/// (a wrapped line ends at the last separator, not at the very edge).
+const ERROR_FIT_ATTEMPTS: usize = 4;
 
 
 /// Measures text the way gpui paints it.
@@ -40,6 +44,7 @@ struct TextMeasurements {
     text_system: Arc<WindowTextSystem>,
     text_style: TextStyle,
     font_size: Pixels,
+    line_height: Pixels,
     char_widths: HashMap<char, Pixels>,
 }
 
@@ -51,13 +56,21 @@ impl TextMeasurements {
             ..Default::default()
         };
         let font_size = text_style.font_size.to_pixels(rem_size);
+        let line_height = text_style.line_height_in_pixels(rem_size);
 
         Self {
             text_system,
             text_style,
             font_size,
+            line_height,
             char_widths: HashMap::new(),
         }
+    }
+
+    /// The height of one line of this text, which is how much the error box
+    /// grows for every extra line.
+    fn line_height(&self) -> Pixels {
+        self.line_height
     }
 
     fn char_width(&mut self, character: char) -> Pixels {
@@ -129,7 +142,75 @@ fn fit_middle(text: &str, max_width: Pixels, measurements: &mut TextMeasurements
     format!("{}{}{}", &text[..head_end], ellipsis, &text[tail_start..])
 }
 
+/// Wraps `text` into lines of at most `max_width` pixels.
+///
+/// gpui counts `.`, `-` and `_` as word characters, so a path such as
+/// `target.txttarget.txt` is a single word and the built-in wrapper breaks it
+/// only at separators like `\`, which leaves large gaps at the end of a line.
+/// Here the break is preferred right after a separator, so paths and words stay
+/// readable; a run without separators is broken anywhere instead of leaving a
+/// gap.
+fn wrap_to_width(text: &str, max_width: Pixels, measurements: &mut TextMeasurements) -> String {
+    const SEPARATORS: &[char] = &[' ', '\\', '/', '.', '-', '_', ':', ','];
 
+    let mut wrapped = String::with_capacity(text.len() + text.len() / 40);
+    let mut line = String::new();
+    let mut line_width = px(0.0);
+    let mut last_separator: Option<usize> = None;
+
+    for character in text.chars() {
+        let width = measurements.char_width(character);
+        if !line.is_empty() && line_width + width > max_width {
+            match last_separator {
+                Some(index) if index < line.len() => {
+                    let rest = line.split_off(index);
+                    wrapped.push_str(&line);
+                    wrapped.push('\n');
+                    line_width = measurements.width(&rest);
+                    line = rest;
+                }
+                _ => {
+                    wrapped.push_str(&line);
+                    wrapped.push('\n');
+                    line.clear();
+                    line_width = px(0.0);
+                }
+            }
+            last_separator = None;
+        }
+
+        line.push(character);
+        line_width += width;
+        if SEPARATORS.contains(&character) {
+            last_separator = Some(line.len());
+        }
+    }
+
+    wrapped.push_str(&line);
+    wrapped
+}
+
+/// Fits an error message into the error box, cutting the middle out when needed.
+///
+/// A wrapped line ends at the last separator rather than at the very edge, so a
+/// message that fills the budget may still wrap into one line too many: such a
+/// message is cut shorter and wrapped again.
+fn fit_error(error: &str, measurements: &mut TextMeasurements) -> String {
+    let line_width = px(ERROR_LINE_WIDTH);
+    let mut budget = line_width * ERROR_MAX_LINES as f32;
+    let mut wrapped = String::new();
+
+    for _ in 0..ERROR_FIT_ATTEMPTS {
+        let fitted = fit_middle(error, budget, measurements);
+        wrapped = wrap_to_width(&fitted, line_width, measurements);
+        if wrapped.matches('\n').count() < ERROR_MAX_LINES {
+            break;
+        }
+        budget *= 0.85;
+    }
+
+    wrapped
+}
 
 pub struct DeleteProgress {
     pub total_files: usize,
@@ -248,9 +329,31 @@ impl Render for DeleteProgressWindow {
         let error_count = self.progress.get_error_count();
         let has_errors = error_count > 0;
 
-        if is_complete && has_errors && !self.resized_for_errors {
-            self.resized_for_errors = true;
-            window.resize(size(px(560.0), px(270.0)));
+        let mut measurements =
+            TextMeasurements::new(window.text_system().clone(), cx.theme(), window.rem_size());
+
+        let display_error = if is_complete && has_errors {
+            self.progress
+                .get_first_error()
+                .map(|error| fit_error(&error, &mut measurements))
+        } else {
+            None
+        };
+        let error_lines = display_error
+            .as_ref()
+            .map(|error| error.matches('\n').count() + 1);
+        let error_line_height = measurements.line_height();
+        let current_display = fit_middle(&current_item, px(PATH_LINE_WIDTH), &mut measurements);
+        let path_display = self.format_path_display(&mut measurements);
+
+        if let Some(lines) = error_lines {
+            if !self.resized_for_errors {
+                self.resized_for_errors = true;
+                // The error box is wrapped here, so let the window grow with it.
+                window.resize(
+                    size(px(560.0), px(270.0) + error_line_height * lines.saturating_sub(1) as f32),
+                );
+            }
         }
 
         if self.should_auto_close() && !has_errors {
@@ -261,11 +364,6 @@ impl Render for DeleteProgressWindow {
             })
             .detach();
         }
-
-        let mut measurements =
-            TextMeasurements::new(window.text_system().clone(), cx.theme(), window.rem_size());
-        let current_display = fit_middle(&current_item, px(PATH_LINE_WIDTH), &mut measurements);
-        let path_display = self.format_path_display(&mut measurements);
 
         let theme = cx.theme();
         let bg = theme.background;
@@ -398,24 +496,20 @@ impl Render for DeleteProgressWindow {
                     ),
             );
 
-        if is_complete && has_errors {
-            if let Some(error_msg) = self.progress.get_first_error() {
-                let display_error = fit_middle(&error_msg, px(ERROR_LINE_WIDTH), &mut measurements);
-                content = content.child(
-                    div()
-                        .mx_4()
-                        .mb_2()
-                        .px_3()
-                        .py_2()
-                        .rounded_md()
-                        .bg(danger_color.opacity(0.08))
-                        .text_xs()
-                        .text_color(danger_color)
-                        .overflow_hidden()
-                        .whitespace_nowrap()
-                        .child(display_error),
-                );
-            }
+        if let Some(display_error) = display_error {
+            content = content.child(
+                div()
+                    .mx_4()
+                    .mb_2()
+                    .px_3()
+                    .py_2()
+                    .rounded_md()
+                    .bg(danger_color.opacity(0.08))
+                    .text_xs()
+                    .text_color(danger_color)
+                    .overflow_hidden()
+                    .child(display_error),
+            );
         }
 
         content.child(
@@ -825,6 +919,18 @@ pub fn run_progress_window(progress: Arc<DeleteProgress>, path: PathBuf) -> anyh
     });
 
     Ok(())
+}
+
+/// Shows the progress window in its error state.
+///
+/// Used when no progress window was displayed at all: a single file or a
+/// directory with few items deletes silently, so a failure would otherwise be
+/// invisible (the process is started detached and has no console).
+pub fn show_error_window(path: PathBuf, message: String) -> anyhow::Result<()> {
+    let progress = Arc::new(DeleteProgress::new(1, 0));
+    progress.set_errors(vec![message]);
+    progress.mark_complete();
+    run_progress_window(progress, path)
 }
 
 // ── Unlock mode UI (仿火绒风格) ─────────────────────────────────────────
