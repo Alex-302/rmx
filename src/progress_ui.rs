@@ -166,7 +166,7 @@ impl Render for DeleteProgressWindow {
 
         if is_complete && has_errors && !self.resized_for_errors {
             self.resized_for_errors = true;
-            window.resize(size(px(420.0), px(270.0)));
+            window.resize(size(px(560.0), px(270.0)));
         }
 
         if self.should_auto_close() && !has_errors {
@@ -633,7 +633,7 @@ pub fn run_confirmation_dialog(
 
         let state_inner = state_clone.clone();
         let path_clone = path.clone();
-        let window_bounds = Bounds::centered(None, size(px(420.0), px(210.0)), cx);
+        let window_bounds = Bounds::centered(None, size(px(560.0), px(210.0)), cx);
 
         cx.spawn(async move |cx| {
             let window_options = WindowOptions {
@@ -642,7 +642,7 @@ pub fn run_confirmation_dialog(
                     ..Default::default()
                 }),
                 window_bounds: Some(WindowBounds::Windowed(window_bounds)),
-                window_min_size: Some(size(px(320.0), px(180.0))),
+                window_min_size: Some(size(px(420.0), px(180.0))),
                 kind: WindowKind::PopUp,
                 is_movable: true,
                 ..Default::default()
@@ -674,7 +674,7 @@ pub fn run_progress_window(progress: Arc<DeleteProgress>, path: PathBuf) -> anyh
 
         let progress_clone = progress.clone();
         let path_clone = path.clone();
-        let window_bounds = Bounds::centered(None, size(px(420.0), px(200.0)), cx);
+        let window_bounds = Bounds::centered(None, size(px(560.0), px(200.0)), cx);
 
         cx.spawn(async move |cx| {
             let window_options = WindowOptions {
@@ -683,7 +683,7 @@ pub fn run_progress_window(progress: Arc<DeleteProgress>, path: PathBuf) -> anyh
                     ..Default::default()
                 }),
                 window_bounds: Some(WindowBounds::Windowed(window_bounds)),
-                window_min_size: Some(size(px(320.0), px(180.0))),
+                window_min_size: Some(size(px(420.0), px(180.0))),
                 kind: WindowKind::PopUp,
                 is_movable: true,
                 ..Default::default()
@@ -907,7 +907,7 @@ impl Render for UnlockProgressWindow {
                     self.phase = UnlockPhase::Success { killed };
                 } else {
                     self.phase = UnlockPhase::Failed { killed, failures };
-                    window.resize(size(px(520.0), px(380.0)));
+                    window.resize(size(px(560.0), px(380.0)));
                 }
             }
         }
@@ -1270,7 +1270,7 @@ pub fn run_unlock_dialog(
                 520,
                 base_height + file_rows_height + proc_rows_height,
             ) as f32;
-            let window_bounds = Bounds::centered(None, size(px(520.0), px(window_height)), cx);
+            let window_bounds = Bounds::centered(None, size(px(560.0), px(window_height)), cx);
 
             cx.spawn(async move |cx| {
                 let window_options = WindowOptions {
